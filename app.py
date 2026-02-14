@@ -1,137 +1,214 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import os
+import sqlite3
 from datetime import datetime
+import random
 
 # -------------------------
-# CONFIG
+# PAGE CONFIG
 # -------------------------
 
 st.set_page_config(
-    page_title="Smart Governance CRM",
+    page_title="CivicAI Smart Governance",
     page_icon="🏛️",
     layout="wide"
 )
 
-DATA_FILE = "complaints.csv"
+st.title("🏛️ CivicAI — AI Powered Smart Governance System")
 
 # -------------------------
-# INIT DATA
+# DATABASE
 # -------------------------
 
-if not os.path.exists(DATA_FILE):
-    df = pd.DataFrame(columns=[
-        "ID",
-        "Name",
-        "Location",
-        "Category",
-        "Issue",
-        "Status",
-        "Date"
-    ])
-    df.to_csv(DATA_FILE, index=False)
+conn = sqlite3.connect("complaints.db", check_same_thread=False)
+c = conn.cursor()
 
-df = pd.read_csv(DATA_FILE)
+c.execute("""
+CREATE TABLE IF NOT EXISTS complaints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    complaint TEXT,
+    category TEXT,
+    priority TEXT,
+    status TEXT,
+    date TEXT
+)
+""")
+
+conn.commit()
 
 # -------------------------
-# SIDEBAR
+# SAMPLE DATA (FOR JUDGES)
 # -------------------------
 
-st.sidebar.title("🏛️ Smart Governance CRM")
+def insert_sample_data():
+
+    sample = [
+
+        ("Rahul Sharma", "Garbage not collected for 5 days", "Sanitation", "High", "Pending"),
+        ("Priya Verma", "Street light not working", "Electricity", "Medium", "Pending"),
+        ("Amit Singh", "Huge pothole causing accidents", "Infrastructure", "High", "Pending"),
+        ("Neha Gupta", "Water leakage from main pipe", "Water", "Medium", "Resolved"),
+        ("Arjun Patel", "Road completely broken", "Infrastructure", "High", "Pending"),
+        ("Sneha Kapoor", "Overflowing garbage bin", "Sanitation", "High", "Pending"),
+        ("Vikas Yadav", "No electricity since morning", "Electricity", "High", "Resolved"),
+        ("Anjali Mehta", "Water supply very dirty", "Water", "Medium", "Pending"),
+    ]
+
+    for row in sample:
+
+        c.execute("""
+        INSERT INTO complaints
+        (name, complaint, category, priority, status, date)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            datetime.now().strftime("%Y-%m-%d %H:%M")
+        ))
+
+    conn.commit()
+
+# Insert sample only if empty
+count = c.execute("SELECT COUNT(*) FROM complaints").fetchone()[0]
+
+if count == 0:
+    insert_sample_data()
+
+# -------------------------
+# AI CATEGORY DETECTION
+# -------------------------
+
+def detect_category(text):
+
+    text = text.lower()
+
+    if "road" in text or "pothole" in text:
+        return "Infrastructure"
+
+    elif "garbage" in text or "waste":
+        return "Sanitation"
+
+    elif "water" in text:
+        return "Water"
+
+    elif "electric" in text or "light":
+        return "Electricity"
+
+    else:
+        return "General"
+
+
+# -------------------------
+# AI PRIORITY
+# -------------------------
+
+def detect_priority(text):
+
+    text = text.lower()
+
+    if "accident" in text or "emergency" in text:
+        return "High"
+
+    elif "not working" in text or "broken":
+        return "Medium"
+
+    else:
+        return "Low"
+
+
+# -------------------------
+# SIDEBAR NAVIGATION
+# -------------------------
 
 page = st.sidebar.radio(
     "Navigation",
-    [
-        "Dashboard",
-        "Submit Complaint",
-        "Analytics",
-        "AI Insights",
-        "Admin Panel"
-    ]
+    ["Citizen Portal", "Admin Dashboard", "Analytics", "AI Insights"]
 )
 
 # -------------------------
-# DASHBOARD
+# LOAD DATA
 # -------------------------
 
-if page == "Dashboard":
-
-    st.title("📊 Governance Dashboard")
-
-    total = len(df)
-    resolved = len(df[df["Status"] == "Resolved"])
-    pending = len(df[df["Status"] == "Pending"])
-
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric("Total Complaints", total)
-    col2.metric("Resolved", resolved)
-    col3.metric("Pending", pending)
-
-    if total > 0:
-
-        st.subheader("Complaints by Category")
-
-        fig = px.histogram(
-            df,
-            x="Category",
-            color="Category"
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
+df = pd.read_sql("SELECT * FROM complaints", conn)
 
 # -------------------------
-# SUBMIT COMPLAINT
+# CITIZEN PORTAL
 # -------------------------
 
-elif page == "Submit Complaint":
+if page == "Citizen Portal":
 
-    st.title("📝 Submit Complaint")
+    st.header("Submit Complaint")
 
-    name = st.text_input("Name")
-    location = st.text_input("Location")
+    name = st.text_input("Your Name")
 
-    category = st.selectbox(
-        "Category",
-        [
-            "Road",
-            "Electricity",
-            "Water",
-            "Sanitation",
-            "Other"
-        ]
-    )
-
-    issue = st.text_area("Describe Issue")
+    complaint = st.text_area("Enter complaint")
 
     if st.button("Submit"):
 
-        if name and location and issue:
+        if complaint:
 
-            new_id = len(df) + 1
+            category = detect_category(complaint)
+            priority = detect_priority(complaint)
 
-            new_row = {
-                "ID": new_id,
-                "Name": name,
-                "Location": location,
-                "Category": category,
-                "Issue": issue,
-                "Status": "Pending",
-                "Date": datetime.now()
-            }
+            c.execute("""
+            INSERT INTO complaints
+            (name, complaint, category, priority, status, date)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                name,
+                complaint,
+                category,
+                priority,
+                "Pending",
+                datetime.now().strftime("%Y-%m-%d %H:%M")
+            ))
 
-            df = pd.concat(
-                [df, pd.DataFrame([new_row])],
-                ignore_index=True
-            )
+            conn.commit()
 
-            df.to_csv(DATA_FILE, index=False)
+            st.success("Complaint submitted successfully")
 
-            st.success("Complaint submitted successfully!")
+            st.info(f"AI Category: {category}")
+            st.info(f"AI Priority: {priority}")
 
-        else:
-            st.error("Please fill all fields")
+# -------------------------
+# ADMIN DASHBOARD
+# -------------------------
+
+elif page == "Admin Dashboard":
+
+    st.header("Admin Dashboard")
+
+    st.metric("Total Complaints", len(df))
+
+    pending = len(df[df.status == "Pending"])
+    resolved = len(df[df.status == "Resolved"])
+
+    col1, col2 = st.columns(2)
+
+    col1.metric("Pending", pending)
+    col2.metric("Resolved", resolved)
+
+    st.dataframe(df, use_container_width=True)
+
+    complaint_id = st.number_input("Enter complaint ID")
+
+    if st.button("Mark Resolved"):
+
+        c.execute("""
+        UPDATE complaints
+        SET status = 'Resolved'
+        WHERE id = ?
+        """, (complaint_id,))
+
+        conn.commit()
+
+        st.success("Complaint resolved")
+
 
 # -------------------------
 # ANALYTICS
@@ -139,82 +216,46 @@ elif page == "Submit Complaint":
 
 elif page == "Analytics":
 
-    st.title("📈 Analytics")
+    st.header("Analytics Dashboard")
 
-    if len(df) > 0:
+    col1, col2 = st.columns(2)
 
-        col1, col2 = st.columns(2)
+    with col1:
 
-        with col1:
+        fig = px.pie(
+            df,
+            names="category",
+            title="Complaint Categories"
+        )
 
-            st.subheader("Complaints by Location")
+        st.plotly_chart(fig, use_container_width=True)
 
-            fig = px.histogram(
-                df,
-                x="Location",
-                color="Location"
-            )
+    with col2:
 
-            st.plotly_chart(fig, use_container_width=True)
+        fig2 = px.bar(
+            df,
+            x="priority",
+            color="priority",
+            title="Priority Distribution"
+        )
 
-        with col2:
+        st.plotly_chart(fig2, use_container_width=True)
 
-            st.subheader("Status Distribution")
-
-            fig = px.pie(
-                df,
-                names="Status"
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
 
 # -------------------------
-# AI INSIGHTS
+# AI INSIGHTS (Hackathon killer feature)
 # -------------------------
 
 elif page == "AI Insights":
 
-    st.title("🤖 AI Insights")
+    st.header("AI Insights")
 
-    if len(df) > 0:
+    most_common = df.category.value_counts().idxmax()
 
-        location_counts = df["Location"].value_counts()
+    st.success(f"Most common issue: {most_common}")
 
-        top_location = location_counts.idxmax()
-        top_count = location_counts.max()
+    resolution_rate = (len(df[df.status=="Resolved"]) / len(df)) * 100
 
-        st.success(
-            f"⚠️ Priority Area: {top_location} ({top_count} complaints)"
-        )
+    st.success(f"Resolution rate: {resolution_rate:.1f}%")
 
-        category_counts = df["Category"].value_counts()
-
-        top_category = category_counts.idxmax()
-
-        st.info(
-            f"Most common issue category: {top_category}"
-        )
-
-# -------------------------
-# ADMIN PANEL
-# -------------------------
-
-elif page == "Admin Panel":
-
-    st.title("🛠️ Admin Panel")
-
-    st.dataframe(df)
-
-    complaint_id = st.number_input(
-        "Enter Complaint ID to Resolve",
-        min_value=1,
-        step=1
-    )
-
-    if st.button("Mark as Resolved"):
-
-        df.loc[df["ID"] == complaint_id, "Status"] = "Resolved"
-
-        df.to_csv(DATA_FILE, index=False)
-
-        st.success("Complaint marked as resolved!")
+    st.info("AI recommends increasing resources in high complaint areas")

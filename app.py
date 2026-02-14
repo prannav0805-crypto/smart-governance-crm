@@ -2,11 +2,17 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
+import os
 import random
+from PIL import Image
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+
 
 # -------------------------
-# PAGE CONFIG
+# CONFIG
 # -------------------------
 
 st.set_page_config(
@@ -15,13 +21,20 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🏛️ CivicAI — AI Powered Smart Governance System")
+st.title("🏛️ CivicAI — AI Smart Governance System (WINNER++)")
+
+
+DB_FILE = "complaints.db"
+UPLOAD_DIR = "uploads"
+
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 
 # -------------------------
 # DATABASE
 # -------------------------
 
-conn = sqlite3.connect("complaints.db", check_same_thread=False)
+conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 c = conn.cursor()
 
 c.execute("""
@@ -32,55 +45,58 @@ CREATE TABLE IF NOT EXISTS complaints (
     category TEXT,
     priority TEXT,
     status TEXT,
-    date TEXT
+    date TEXT,
+    lat REAL,
+    lon REAL,
+    image_path TEXT
 )
 """)
 
 conn.commit()
 
+
 # -------------------------
-# SAMPLE DATA (FOR JUDGES)
+# SAMPLE DATA
 # -------------------------
 
 def insert_sample_data():
 
     sample = [
 
-        ("Rahul Sharma", "Garbage not collected for 5 days", "Sanitation", "High", "Pending"),
-        ("Priya Verma", "Street light not working", "Electricity", "Medium", "Pending"),
-        ("Amit Singh", "Huge pothole causing accidents", "Infrastructure", "High", "Pending"),
-        ("Neha Gupta", "Water leakage from main pipe", "Water", "Medium", "Resolved"),
-        ("Arjun Patel", "Road completely broken", "Infrastructure", "High", "Pending"),
-        ("Sneha Kapoor", "Overflowing garbage bin", "Sanitation", "High", "Pending"),
-        ("Vikas Yadav", "No electricity since morning", "Electricity", "High", "Resolved"),
-        ("Anjali Mehta", "Water supply very dirty", "Water", "Medium", "Pending"),
+        ("Rahul Sharma", "Garbage not collected for 5 days", "Sanitation", "High", "Pending", 19.07, 72.87, None),
+        ("Priya Verma", "Street light not working", "Electricity", "Medium", "Pending", 19.08, 72.88, None),
+        ("Amit Singh", "Huge pothole causing accidents", "Infrastructure", "High", "Pending", 19.06, 72.86, None),
+        ("Neha Gupta", "Water leakage from main pipe", "Water", "Medium", "Resolved", 19.05, 72.89, None),
+
     ]
 
     for row in sample:
 
         c.execute("""
         INSERT INTO complaints
-        (name, complaint, category, priority, status, date)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (name, complaint, category, priority, status, date, lat, lon, image_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             row[0],
             row[1],
             row[2],
             row[3],
             row[4],
-            datetime.now().strftime("%Y-%m-%d %H:%M")
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            row[5],
+            row[6],
+            row[7]
         ))
 
     conn.commit()
 
-# Insert sample only if empty
-count = c.execute("SELECT COUNT(*) FROM complaints").fetchone()[0]
 
-if count == 0:
+if c.execute("SELECT COUNT(*) FROM complaints").fetchone()[0] == 0:
     insert_sample_data()
 
+
 # -------------------------
-# AI CATEGORY DETECTION
+# AI CATEGORY
 # -------------------------
 
 def detect_category(text):
@@ -90,51 +106,104 @@ def detect_category(text):
     if "road" in text or "pothole" in text:
         return "Infrastructure"
 
-    elif "garbage" in text or "waste":
+    if "garbage" in text:
         return "Sanitation"
 
-    elif "water" in text:
+    if "water" in text:
         return "Water"
 
-    elif "electric" in text or "light":
+    if "electric" in text or "light" in text:
         return "Electricity"
 
-    else:
-        return "General"
+    return "General"
 
 
 # -------------------------
-# AI PRIORITY
+# ML PRIORITY MODEL
 # -------------------------
 
-def detect_priority(text):
+def train_model():
 
-    text = text.lower()
+    df = pd.read_sql("SELECT complaint, priority FROM complaints", conn)
 
-    if "accident" in text or "emergency" in text:
-        return "High"
+    if len(df) < 2:
+        return None, None
 
-    elif "not working" in text or "broken":
+    vectorizer = TfidfVectorizer()
+    X = vectorizer.fit_transform(df["complaint"])
+    y = df["priority"]
+
+    model = LogisticRegression()
+    model.fit(X, y)
+
+    return vectorizer, model
+
+
+vectorizer, model = train_model()
+
+
+def predict_priority(text):
+
+    if model is None:
         return "Medium"
 
-    else:
-        return "Low"
+    X = vectorizer.transform([text])
+    return model.predict(X)[0]
 
 
 # -------------------------
-# SIDEBAR NAVIGATION
+# SLA SYSTEM
+# -------------------------
+
+SLA_HOURS = {
+
+    "High": 24,
+    "Medium": 48,
+    "Low": 72
+
+}
+
+
+def get_sla_status(row):
+
+    created = datetime.strptime(row["date"], "%Y-%m-%d %H:%M")
+
+    deadline = created + timedelta(hours=SLA_HOURS.get(row["priority"], 48))
+
+    remaining = deadline - datetime.now()
+
+    if row["status"] == "Resolved":
+        return "Resolved", "green"
+
+    if remaining.total_seconds() < 0:
+        return "BREACHED", "red"
+
+    hours_left = int(remaining.total_seconds() / 3600)
+
+    return f"{hours_left}h left", "orange"
+
+
+# -------------------------
+# NAVIGATION
 # -------------------------
 
 page = st.sidebar.radio(
+
     "Navigation",
-    ["Citizen Portal", "Admin Dashboard", "Analytics", "AI Insights"]
+
+    [
+        "Citizen Portal",
+        "Admin Dashboard",
+        "Analytics",
+        "AI Insights",
+        "Chatbot Assistant"
+    ]
+
 )
 
-# -------------------------
-# LOAD DATA
-# -------------------------
 
-df = pd.read_sql("SELECT * FROM complaints", conn)
+df = pd.read_sql("SELECT * FROM complaints ORDER BY date DESC", conn)
+
 
 # -------------------------
 # CITIZEN PORTAL
@@ -144,36 +213,51 @@ if page == "Citizen Portal":
 
     st.header("Submit Complaint")
 
-    name = st.text_input("Your Name")
+    name = st.text_input("Name")
 
-    complaint = st.text_area("Enter complaint")
+    complaint = st.text_area("Complaint")
+
+    lat = st.number_input("Latitude", value=0.0)
+    lon = st.number_input("Longitude", value=0.0)
+
+    image = st.file_uploader("Upload Image", type=["jpg", "png"])
+
 
     if st.button("Submit"):
 
-        if complaint:
+        category = detect_category(complaint)
 
-            category = detect_category(complaint)
-            priority = detect_priority(complaint)
+        priority = predict_priority(complaint)
 
-            c.execute("""
-            INSERT INTO complaints
-            (name, complaint, category, priority, status, date)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                name,
-                complaint,
-                category,
-                priority,
-                "Pending",
-                datetime.now().strftime("%Y-%m-%d %H:%M")
-            ))
+        image_path = None
 
-            conn.commit()
+        if image:
+            path = f"{UPLOAD_DIR}/{image.name}"
+            with open(path, "wb") as f:
+                f.write(image.read())
+            image_path = path
 
-            st.success("Complaint submitted successfully")
 
-            st.info(f"AI Category: {category}")
-            st.info(f"AI Priority: {priority}")
+        c.execute("""
+        INSERT INTO complaints
+        (name, complaint, category, priority, status, date, lat, lon, image_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            name,
+            complaint,
+            category,
+            priority,
+            "Pending",
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            lat,
+            lon,
+            image_path
+        ))
+
+        conn.commit()
+
+        st.success("Complaint submitted")
+
 
 # -------------------------
 # ADMIN DASHBOARD
@@ -183,31 +267,27 @@ elif page == "Admin Dashboard":
 
     st.header("Admin Dashboard")
 
-    st.metric("Total Complaints", len(df))
+    st.metric("Total", len(df))
 
-    pending = len(df[df.status == "Pending"])
-    resolved = len(df[df.status == "Resolved"])
+    for _, row in df.iterrows():
 
-    col1, col2 = st.columns(2)
+        sla, color = get_sla_status(row)
 
-    col1.metric("Pending", pending)
-    col2.metric("Resolved", resolved)
+        st.markdown(f"""
+        **ID {row['id']}**
+        Complaint: {row['complaint']}
+        Priority: {row['priority']}
+        SLA: :{color}[{sla}]
+        Status: {row['status']}
+        """)
 
-    st.dataframe(df, use_container_width=True)
+        if row["image_path"]:
+            st.image(row["image_path"], width=200)
 
-    complaint_id = st.number_input("Enter complaint ID")
-
-    if st.button("Mark Resolved"):
-
-        c.execute("""
-        UPDATE complaints
-        SET status = 'Resolved'
-        WHERE id = ?
-        """, (complaint_id,))
-
-        conn.commit()
-
-        st.success("Complaint resolved")
+        if st.button(f"Resolve {row['id']}"):
+            c.execute("UPDATE complaints SET status='Resolved' WHERE id=?", (row["id"],))
+            conn.commit()
+            st.rerun()
 
 
 # -------------------------
@@ -216,46 +296,66 @@ elif page == "Admin Dashboard":
 
 elif page == "Analytics":
 
-    st.header("Analytics Dashboard")
+    st.header("Analytics")
 
-    col1, col2 = st.columns(2)
+    fig = px.pie(df, names="category")
+    st.plotly_chart(fig)
 
-    with col1:
+    sla_status = [get_sla_status(row)[0] for _, row in df.iterrows()]
 
-        fig = px.pie(
-            df,
-            names="category",
-            title="Complaint Categories"
-        )
+    sla_df = pd.DataFrame({"SLA": sla_status})
 
-        st.plotly_chart(fig, use_container_width=True)
+    fig2 = px.histogram(sla_df, x="SLA")
 
-    with col2:
-
-        fig2 = px.bar(
-            df,
-            x="priority",
-            color="priority",
-            title="Priority Distribution"
-        )
-
-        st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2)
 
 
 # -------------------------
-# AI INSIGHTS (Hackathon killer feature)
+# AI INSIGHTS
 # -------------------------
 
 elif page == "AI Insights":
 
     st.header("AI Insights")
 
-    most_common = df.category.value_counts().idxmax()
+    st.write("Most common issue:", df["category"].value_counts().idxmax())
 
-    st.success(f"Most common issue: {most_common}")
+    breach = sum(1 for _, r in df.iterrows() if get_sla_status(r)[0]=="BREACHED")
 
-    resolution_rate = (len(df[df.status=="Resolved"]) / len(df)) * 100
+    st.write("SLA breaches:", breach)
 
-    st.success(f"Resolution rate: {resolution_rate:.1f}%")
 
-    st.info("AI recommends increasing resources in high complaint areas")
+# -------------------------
+# CHATBOT
+# -------------------------
+
+elif page == "Chatbot Assistant":
+
+    st.header("AI Assistant")
+
+    if "chat" not in st.session_state:
+        st.session_state.chat = []
+
+    user = st.text_input("Ask")
+
+    if st.button("Send"):
+
+        if "status" in user.lower():
+
+            response = f"{len(df[df.status=='Pending'])} pending complaints"
+
+        elif "sla" in user.lower():
+
+            response = "Monitoring SLA actively"
+
+        else:
+
+            response = "I assist with governance analytics"
+
+        st.session_state.chat.append(("You", user))
+        st.session_state.chat.append(("AI", response))
+
+
+    for speaker, msg in st.session_state.chat:
+
+        st.write(f"{speaker}: {msg}")
